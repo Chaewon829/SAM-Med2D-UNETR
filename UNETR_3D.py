@@ -10,8 +10,7 @@ import cv2
 from PIL import Image
 from albumentations.pytorch import ToTensorV2
 import albumentations as A
-from SAM_Med2D.segment_anything import sam_model_registry
-from SAM_Med2D.segment_anything.predictor_sammed import SammedPredictor
+from segment_anything import sam_model_registry
 from argparse import Namespace
 from albumentations.pytorch import ToTensorV2
 
@@ -90,17 +89,6 @@ class SamMed2DEncoder(nn.Module):
         return input_image, layer_features
     
     def set_image(self, image: np.ndarray, image_format: str = "RGB"):
-        """
-        Sets the image for the encoder.
-
-        Parameters:
-        - image (np.ndarray): Input image with shape [B, D, H, W, C].
-        - image_format (str): Format of the input image ("RGB" or "BGR").
-
-        Returns:
-        - input_image (torch.Tensor): Normalized and transformed images.
-        - layer_features (List[torch.Tensor]): Features from specified encoder layers with shape [B, D, ...].
-        """
         assert image_format in ["RGB", "BGR"], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
         if image_format != self.model.image_format:
             image = image[..., ::-1]
@@ -244,13 +232,12 @@ class SAMDecoder3D(nn.Module):
     def forward(self, x, features):
         z0, z3, z6, z9, z12 = x, *features
         B, D, C, H, W = x.shape    
-        # print(f"z0 : {z0.shape}, z3 : {z3.shape}, z6 : {z6.shape}, z9 : {z9.shape}, z12 : {z12.shape}")
+  
         # z0 = z0.permute(0,2,3,4,1) #B, C, H, W, D
         z3 = z3.permute(0,4,2,3,1) #B, 768, h, w, D
         z6 = z6.permute(0,4,2,3,1) #B, 768, h, w, D
         z9 = z9.permute(0,4,2,3,1) #B, 768, h, w, D
         z12 = z12.permute(0,4,2,3,1) #B, 768, h, w, D
-        # print(f"z0 : {z0.shape}, z3 : {z3.shape}, z6 : {z6.shape}, z9 : {z9.shape}, z12 : {z12.shape}")
 
         # Decoder operations
         z12 = self.decoder12_upsampler(z12)  # 512
@@ -265,17 +252,17 @@ class SAMDecoder3D(nn.Module):
         return output
 
 
-class M3dSAM2DUNETR(nn.Module) :
+class MedSAM2DUNETR(nn.Module) :
     def __init__(self, embed_dim = 768, patch_size = 16, input_dim = 3, output_dim=3):
-        super(M3dSAM2DUNETR, self).__init__()
+        super(MedSAM2DUNETR, self).__init__()
 
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.input_dim = input_dim
         self.output_dim = output_dim
         
-        self.encoder = MedSam2dEncoder() 
-        self.decoder = SAMDecoder3D(embed_dim=self.embed_dim, patch_size=self.patch_size, input_dim=self.input_dim, output_dim=self.output_dim)
+        self.encoder = MedSam2dEncoder().to(device) 
+        self.decoder = SAMDecoder3D(embed_dim=self.embed_dim, patch_size=self.patch_size, input_dim=self.input_dim, output_dim=self.output_dim).to(device)
 
         # Freeze encoder parameters
         for param in self.encoder.parameters():
@@ -283,23 +270,21 @@ class M3dSAM2DUNETR(nn.Module) :
 
     def forward(self, x):
 
-        B, D, C, H, W = x.shape
-        x = x.view(B * D, C, H, W).contiguous()
-        features = self.encoder(x)        
+        B, D, H, W, C= x.shape
+        _,features = self.encoder(x)        
         print(f'encoder_features : {len(features)}, {features[0].shape}')       
-        reshaped_features = [
-            f.view(B, D, f.shape[1], f.shape[2], f.shape[3]).contiguous() for f in features
-        ]
-        output = self.decoder(x.view(B, D, C, H, W).contiguous(), reshaped_features)
+        x = torch.tensor(x).permute(0,4,2,3,1).to(device)
+        x = x.float()
+        output = self.decoder(x, features)
         return output
 
 
 #test
 
 if __name__ == '__main__':
-    model = M3dSAM2DUNETR()
-    # x = torch.randn( 1, 4, 3, 1024,1024 ) #B, D, C, H, W
-    x = torch.randn( 1, 4, 3, 224,224 ) #B, D, C, H, W
+    model = MedSAM2DUNETR()
+    # x = torch.randn( 1, 4, 3, 224,224 ) #B, D, C, H, W
+    x = np.random.rand(1, 4, 256, 256, 3)
     output = model(x)
     
     print(f"UNETR output_shape : {output.shape}")
